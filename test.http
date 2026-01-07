@@ -17,6 +17,6 @@ Content-Type: application/json
 }
 
 ### get per session
-GET http://localhost:8080/api/sessions/wa-2/me
+GET http://localhost:8080/api/sessions/wa-1/me
 Accept: application/json
 Content-Type: application/json

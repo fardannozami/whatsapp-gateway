@@ -10,6 +10,14 @@ type PairCodeResponse struct {
 	JID         string `json:"jid,omitempty"`
 }
 
+type PairStreamResponse struct {
+	Status      string `json:"status"`
+	PairingCode string `json:"pairing_code,omitempty"`
+	ExpiresIn   int    `json:"expires_in,omitempty"`
+	RetryIn     int    `json:"retry_in,omitempty"`
+	Detail      string `json:"detail,omitempty"`
+}
+
 type MeResponse struct {
 	Status   string `json:"status"`
 	Id       string `json:"id"`

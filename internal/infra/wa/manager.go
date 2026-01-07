@@ -25,6 +25,8 @@ type Manager struct {
 	clients    map[string]*whatsmeow.Client
 	containers map[string]*sqlstore.Container
 	status     map[string]string
+	pairMu     sync.RWMutex
+	pairing    map[string]PairingState
 }
 
 func NewManager(dbBasePath string, logger walog.Logger) *Manager {
@@ -34,6 +36,7 @@ func NewManager(dbBasePath string, logger walog.Logger) *Manager {
 		clients:    make(map[string]*whatsmeow.Client),
 		containers: make(map[string]*sqlstore.Container),
 		status:     make(map[string]string),
+		pairing:    make(map[string]PairingState),
 	}
 }
 
@@ -355,6 +358,10 @@ func (m *Manager) PairPhone(ctx context.Context, client *whatsmeow.Client, phone
 	code, err := client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
 		log.Println("⚠️ PairPhone warning:", err)
+		return "", err
+	}
+	if code == "" {
+		return "", fmt.Errorf("pair phone returned empty code")
 	}
 
 	fmt.Println("🔢 Pairing Code:", code)
@@ -405,4 +412,102 @@ func (m *Manager) getStatus(session string) (string, bool) {
 	defer m.mu.RUnlock()
 	status, ok := m.status[session]
 	return status, ok
+}
+
+type PairingState struct {
+	Phone       string
+	Code        string
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
+	LastAttempt time.Time
+	LastError   string
+	NextRetryAt time.Time
+}
+
+func (m *Manager) SetPairingPhone(session, phone string) error {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return err
+	}
+
+	m.pairMu.Lock()
+	defer m.pairMu.Unlock()
+
+	state := m.pairing[key]
+	if state.Phone != phone {
+		state.Phone = phone
+		state.Code = ""
+		state.IssuedAt = time.Time{}
+		state.ExpiresAt = time.Time{}
+		state.LastAttempt = time.Time{}
+		state.LastError = ""
+		state.NextRetryAt = time.Time{}
+	}
+	m.pairing[key] = state
+	return nil
+}
+
+func (m *Manager) UpdatePairingCode(session, code string, issuedAt time.Time, ttl time.Duration) error {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return err
+	}
+
+	m.pairMu.Lock()
+	defer m.pairMu.Unlock()
+
+	state := m.pairing[key]
+	state.Code = code
+	state.IssuedAt = issuedAt
+	state.ExpiresAt = issuedAt.Add(ttl)
+	state.LastAttempt = time.Time{}
+	state.LastError = ""
+	state.NextRetryAt = time.Time{}
+	m.pairing[key] = state
+	return nil
+}
+
+func (m *Manager) UpdatePairingFailure(session, errMsg string, at time.Time, backoff time.Duration) error {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return err
+	}
+
+	m.pairMu.Lock()
+	defer m.pairMu.Unlock()
+
+	state := m.pairing[key]
+	state.LastAttempt = at
+	state.LastError = errMsg
+	if backoff > 0 {
+		state.NextRetryAt = at.Add(backoff)
+	} else {
+		state.NextRetryAt = time.Time{}
+	}
+	m.pairing[key] = state
+	return nil
+}
+
+func (m *Manager) GetPairingState(session string) (PairingState, bool) {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return PairingState{}, false
+	}
+
+	m.pairMu.RLock()
+	defer m.pairMu.RUnlock()
+	state, ok := m.pairing[key]
+	return state, ok
+}
+
+func (m *Manager) ClearPairing(session string) error {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return err
+	}
+
+	m.pairMu.Lock()
+	defer m.pairMu.Unlock()
+	delete(m.pairing, key)
+	return nil
 }

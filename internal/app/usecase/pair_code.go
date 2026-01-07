@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/fardannozami/whatsapp-gateway/internal/domain/phone"
 	"github.com/fardannozami/whatsapp-gateway/internal/infra/wa"
@@ -31,6 +32,9 @@ func (u *PairCodeUsecase) Execute(ctx context.Context, in PairCodeInput) (*PairC
 	if err != nil {
 		return nil, err
 	}
+	if err := u.wa.SetPairingPhone(in.Session, p); err != nil {
+		return nil, fmt.Errorf("set pairing phone: %w", err)
+	}
 
 	// client, _, err := u.wa.CreateOrGetClientByPhone(p)
 	client, err := u.wa.CreateOrGetClientBySession(in.Session)
@@ -46,6 +50,7 @@ func (u *PairCodeUsecase) Execute(ctx context.Context, in PairCodeInput) (*PairC
 	// If already logged in
 	if client.Store.ID != nil {
 		_ = u.wa.RegisterClientInMemory(client)
+		_ = u.wa.ClearPairing(in.Session)
 		return &PairCodeOutput{
 			Status: "already_logged_in",
 		}, nil
@@ -53,7 +58,12 @@ func (u *PairCodeUsecase) Execute(ctx context.Context, in PairCodeInput) (*PairC
 
 	code, err := u.wa.PairPhone(ctx, client, p)
 	if err != nil {
+		backoff, _ := pairingBackoff(err)
+		_ = u.wa.UpdatePairingFailure(in.Session, err.Error(), time.Now(), backoff)
 		return nil, fmt.Errorf("pair phone: %w", err)
+	}
+	if err := u.wa.UpdatePairingCode(in.Session, code, time.Now(), pairCodeTTL); err != nil {
+		return nil, fmt.Errorf("update pairing code: %w", err)
 	}
 
 	// Setelah user input pairing code di HP, login akan terjadi.
