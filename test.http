@@ -27,6 +27,6 @@ Accept: application/json
 Content-Type: application/json
 
 ### delete per session
-DELETE http://localhost:8080/api/sessions/wa-2
+DELETE http://localhost:8080/api/sessions/wa-1
 Accept: application/json
 Content-Type: application/json
