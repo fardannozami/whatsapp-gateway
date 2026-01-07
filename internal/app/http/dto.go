@@ -10,6 +10,16 @@ type PairCodeResponse struct {
 	JID         string `json:"jid,omitempty"`
 }
 
+type SendTextRequest struct {
+	To      string `json:"to"`
+	Message string `json:"message"`
+}
+
+type SendTextResponse struct {
+	Status    string `json:"status"`
+	MessageID string `json:"message_id,omitempty"`
+}
+
 type PairStreamResponse struct {
 	Status      string `json:"status"`
 	PairingCode string `json:"pairing_code,omitempty"`

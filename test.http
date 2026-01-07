@@ -4,7 +4,7 @@ Accept: application/json
 Content-Type: application/json
 
 {
-    "phone": "628985066454"
+    "phone": "+628985066454"
 }
 
 ### Pair code
@@ -30,3 +30,14 @@ Content-Type: application/json
 DELETE http://localhost:8080/api/sessions/wa-1
 Accept: application/json
 Content-Type: application/json
+
+
+### Pair SEND TEXT
+POST http://localhost:8080/api/wa-1/sendText
+Accept: application/json
+Content-Type: application/json
+
+{
+    "to": "+6281229822979",
+    "message": "halo"
+}

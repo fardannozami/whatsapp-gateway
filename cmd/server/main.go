@@ -31,8 +31,9 @@ func main() {
 	delUC := usecase.NewDeleteSessionUsecase(waManager)
 	stopUC := usecase.NewStopSessionUsecase(waManager)
 	delFUC := usecase.NewDeleteSessionForceUsecase(waManager)
+	sendUC := usecase.NewSendTextUsecase(waManager)
 
-	handler := http.NewHandler(pairUC, listUC, meUC, pairSU, sessUC, delUC, stopUC, delFUC)
+	handler := http.NewHandler(pairUC, listUC, meUC, pairSU, sessUC, delUC, stopUC, delFUC, sendUC)
 	router := http.NewRouter(handler)
 
 	log.Printf("HTTP listening on :%s", cfg.Port)

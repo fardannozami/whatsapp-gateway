@@ -13,9 +13,10 @@ type Handler struct {
 	delUC  *usecase.DeleteSessionUsecase
 	stopUC *usecase.StopSessionUsecase
 	delFUC *usecase.DeleteSessionForceUsecase
+	sendUC *usecase.SendTextUsecase
 }
 
-func NewHandler(pairUC *usecase.PairCodeUsecase, listUC *usecase.ListClientsUsecase, meUC *usecase.MeUsecase, pairSU *usecase.PairStreamUsecase, sessUC *usecase.ListSessionsUsecase, delUC *usecase.DeleteSessionUsecase, stopUC *usecase.StopSessionUsecase, delFUC *usecase.DeleteSessionForceUsecase) *Handler {
+func NewHandler(pairUC *usecase.PairCodeUsecase, listUC *usecase.ListClientsUsecase, meUC *usecase.MeUsecase, pairSU *usecase.PairStreamUsecase, sessUC *usecase.ListSessionsUsecase, delUC *usecase.DeleteSessionUsecase, stopUC *usecase.StopSessionUsecase, delFUC *usecase.DeleteSessionForceUsecase, sendUC *usecase.SendTextUsecase) *Handler {
 	return &Handler{
 		pairUC: pairUC,
 		listUC: listUC,
@@ -25,5 +26,6 @@ func NewHandler(pairUC *usecase.PairCodeUsecase, listUC *usecase.ListClientsUsec
 		delUC:  delUC,
 		stopUC: stopUC,
 		delFUC: delFUC,
+		sendUC: sendUC,
 	}
 }

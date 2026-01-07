@@ -10,6 +10,7 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	wa := r.Group("/api")
 	wa.POST("/:session/auth/request-code", h.PairCode)
+	wa.POST("/:session/sendText", h.SendText)
 	wa.GET("/clients", h.Clients)
 
 	sessions := wa.Group("/sessions")
