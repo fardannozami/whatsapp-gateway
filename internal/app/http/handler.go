@@ -21,6 +21,15 @@ func (h *Handler) Health(c *gin.Context) {
 }
 
 func (h *Handler) PairCode(c *gin.Context) {
+	session := c.Param("session")
+
+	if session == "" {
+		c.JSON(400, gin.H{
+			"error": "session param is required",
+		})
+		return
+	}
+
 	var req PairCodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json", "detail": err.Error()})
@@ -28,9 +37,10 @@ func (h *Handler) PairCode(c *gin.Context) {
 	}
 
 	out, err := h.pairUC.Execute(c.Request.Context(), usecase.PairCodeInput{
-		Phone:      req.Phone,
-		ClientType: "chrome",
+		Phone:   req.Phone,
+		Session: session,
 	})
+
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "pair failed", "detail": err.Error()})
 		return
@@ -39,7 +49,6 @@ func (h *Handler) PairCode(c *gin.Context) {
 	c.JSON(http.StatusOK, PairCodeResponse{
 		Status:      out.Status,
 		PairingCode: out.PairingCode,
-		JID:         out.JID,
 	})
 }
 

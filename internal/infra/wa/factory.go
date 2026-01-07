@@ -1,10 +1,12 @@
 package wa
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	_ "modernc.org/sqlite"
@@ -15,12 +17,28 @@ func NewSQLStoreContainer(sqlPath string) (*sqlstore.Container, error) {
 		return nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", sqlPath)
+	db, err := sql.Open("sqlite", sqliteDSN(sqlPath))
 	if err != nil {
 		return nil, fmt.Errorf("Open sqlite: %w", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = ON;"); err != nil {
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 
 	container := sqlstore.NewWithDB(db, "sqlite", nil)
+	if err := container.Upgrade(context.Background()); err != nil {
+		return nil, fmt.Errorf("upgrade db schema: %w", err)
+	}
 
 	return container, nil
+}
+
+func sqliteDSN(path string) string {
+	params := "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	if strings.Contains(path, "?") {
+		return path + "&" + params
+	}
+	return path + "?" + params
 }

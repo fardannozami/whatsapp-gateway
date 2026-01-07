@@ -8,8 +8,8 @@ func NewRouter(h *Handler) *gin.Engine {
 
 	r.GET("/health", h.Health)
 
-	wa := r.Group("/wa")
-	wa.POST("/pair-code", h.PairCode)
+	wa := r.Group("/api")
+	wa.POST("/:session/auth/request-code", h.PairCode)
 	wa.GET("/clients", h.Clients)
 
 	return r

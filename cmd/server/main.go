@@ -13,14 +13,9 @@ import (
 func main() {
 	cfg := config.Load()
 
-	waLogger := walog.Stdout("WA", "INFO", true)
+	waLogger := walog.Stdout("WA", "ERROR", true)
 
-	container, err := wa.NewSQLStoreContainer(cfg.SQLitePath)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	waManager := wa.NewManager(container, waLogger)
+	waManager := wa.NewManager(cfg.SQLitePath, waLogger)
 
 	pairUC := usecase.NewPairCodeUsecase(waManager)
 	listUC := usecase.NewListClientsUsecase(waManager)

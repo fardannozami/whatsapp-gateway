@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,17 +18,19 @@ import (
 )
 
 type Manager struct {
-	container *sqlstore.Container
-	log       walog.Logger
-	mu        sync.RWMutex
-	clients   map[string]*whatsmeow.Client
+	dbBasePath string
+	log        walog.Logger
+	mu         sync.RWMutex
+	clients    map[string]*whatsmeow.Client
+	containers map[string]*sqlstore.Container
 }
 
-func NewManager(container *sqlstore.Container, logger walog.Logger) *Manager {
+func NewManager(dbBasePath string, logger walog.Logger) *Manager {
 	return &Manager{
-		container: container,
-		log:       logger,
-		clients:   make(map[string]*whatsmeow.Client),
+		dbBasePath: dbBasePath,
+		log:        logger,
+		clients:    make(map[string]*whatsmeow.Client),
+		containers: make(map[string]*sqlstore.Container),
 	}
 }
 
@@ -48,8 +53,55 @@ func (m *Manager) GetClient(jid string) (*whatsmeow.Client, bool) {
 	return c, ok
 }
 
+func (m *Manager) CreateOrGetClientBySession(session string) (*whatsmeow.Client, error) {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return nil, err
+	}
+
+	// 1️⃣ cek memory
+	m.mu.RLock()
+	if c, ok := m.clients[key]; ok {
+		m.mu.RUnlock()
+		return c, nil
+	}
+	m.mu.RUnlock()
+
+	// 2️⃣ lock create (anti race)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if c, ok := m.clients[key]; ok {
+		return c, nil
+	}
+
+	// 3️⃣ SELALU NewDevice
+	// sqlstore akan auto-load device lama kalau ada
+	container, err := m.getContainerLocked(key)
+	if err != nil {
+		return nil, fmt.Errorf("open store: %w", err)
+	}
+	device := container.NewDevice()
+
+	// 4️⃣ create client
+	client := whatsmeow.NewClient(device, m.log)
+
+	// 5️⃣ simpan client by session
+	m.clients[key] = client
+
+	return client, nil
+}
+
 func (m *Manager) CreateOrGetClientByPhone(phone string) (*whatsmeow.Client, *store.Device, error) {
-	device := m.container.NewDevice()
+	key, err := normalizeSession(phone)
+	if err != nil {
+		return nil, nil, err
+	}
+	container, err := m.getContainer(key)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open store: %w", err)
+	}
+	device := container.NewDevice()
 	client := whatsmeow.NewClient(device, m.log)
 
 	return client, device, nil
@@ -68,6 +120,53 @@ func (m *Manager) RegisterClientInMemory(client *whatsmeow.Client) error {
 	m.clients[key] = client
 
 	return nil
+}
+
+var sessionKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+func normalizeSession(session string) (string, error) {
+	if session == "" {
+		return "", fmt.Errorf("session is required")
+	}
+	if !sessionKeyRe.MatchString(session) {
+		return "", fmt.Errorf("invalid session: use letters, numbers, dash, underscore")
+	}
+	return session, nil
+}
+
+func (m *Manager) getContainer(session string) (*sqlstore.Container, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.getContainerLocked(session)
+}
+
+func (m *Manager) getContainerLocked(session string) (*sqlstore.Container, error) {
+	if c, ok := m.containers[session]; ok {
+		return c, nil
+	}
+
+	path := dbPathForSession(m.dbBasePath, session)
+	container, err := NewSQLStoreContainer(path)
+	if err != nil {
+		return nil, err
+	}
+	m.containers[session] = container
+	return container, nil
+}
+
+func dbPathForSession(basePath, session string) string {
+	if basePath == "" {
+		return session + ".db"
+	}
+
+	if filepath.Ext(basePath) == ".db" {
+		dir := filepath.Dir(basePath)
+		base := strings.TrimSuffix(filepath.Base(basePath), ".db")
+		filename := base + "-" + session + ".db"
+		return filepath.Join(dir, filename)
+	}
+
+	return filepath.Join(basePath, session+".db")
 }
 
 func (m *Manager) EnsureConnected(ctx context.Context, client *whatsmeow.Client) error {
@@ -91,25 +190,9 @@ func (m *Manager) EnsureConnected(ctx context.Context, client *whatsmeow.Client)
 	}
 }
 
-func ParseClientType(s string) whatsmeow.PairClientType {
-	switch s {
-	case "chrome":
-		return whatsmeow.PairClientChrome
-	case "firefox":
-		return whatsmeow.PairClientFirefox
-	case "safari":
-		return whatsmeow.PairClientSafari
-	case "edge":
-		return whatsmeow.PairClientEdge
-	default:
-		return whatsmeow.PairClientChrome
-	}
-}
-
-func (m *Manager) PairPhone(ctx context.Context, client *whatsmeow.Client, phone string, clientType whatsmeow.PairClientType) (string, error) {
+func (m *Manager) PairPhone(ctx context.Context, client *whatsmeow.Client, phone string) (string, error) {
 	// showPushNotification = true biar lebih smooth
-	fmt.Println(clientType)
-	code, err := client.PairPhone(ctx, phone, true, clientType, "Chrome (Linux)")
+	code, err := client.PairPhone(ctx, phone, true, whatsmeow.PairClientChrome, "Chrome (Linux)")
 	if err != nil {
 		log.Println("⚠️ PairPhone warning:", err)
 	}

@@ -1,8 +1,17 @@
 ### Pair code
-POST http://localhost:8080/wa/pair-code
+POST http://localhost:8080/api/wa-1/auth/request-code
 Accept: application/json
 Content-Type: application/json
 
 {
     "phone": "628985066454"
+}
+
+### Pair code
+POST http://localhost:8080/api/wa-2/auth/request-code
+Accept: application/json
+Content-Type: application/json
+
+{
+    "phone": "6281229822979"
 }
