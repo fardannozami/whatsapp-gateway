@@ -4,10 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +12,7 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
 	walog "go.mau.fi/whatsmeow/util/log"
 )
 
@@ -25,19 +23,24 @@ type Manager struct {
 	clients    map[string]*whatsmeow.Client
 	containers map[string]*sqlstore.Container
 	status     map[string]string
+	statusFile string
+	statusMu   sync.Mutex
 	pairMu     sync.RWMutex
 	pairing    map[string]PairingState
 }
 
 func NewManager(dbBasePath string, logger walog.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		dbBasePath: dbBasePath,
 		log:        logger,
 		clients:    make(map[string]*whatsmeow.Client),
 		containers: make(map[string]*sqlstore.Container),
 		status:     make(map[string]string),
+		statusFile: statusFilePath(dbBasePath),
 		pairing:    make(map[string]PairingState),
 	}
+	m.loadPersistedStatuses()
+	return m
 }
 
 func (m *Manager) ListClients() []string {
@@ -93,6 +96,7 @@ func (m *Manager) CreateOrGetClientBySession(session string) (*whatsmeow.Client,
 
 	// 4️⃣ create client
 	client := whatsmeow.NewClient(device, m.log)
+	m.registerEventHandlers(key, client)
 
 	// 5️⃣ simpan client by session
 	m.clients[key] = client
@@ -114,6 +118,7 @@ func (m *Manager) CreateOrGetClientByPhone(phone string) (*whatsmeow.Client, *st
 		return nil, nil, fmt.Errorf("load device: %w", err)
 	}
 	client := whatsmeow.NewClient(device, m.log)
+	m.registerEventHandlers(key, client)
 
 	return client, device, nil
 }
@@ -143,179 +148,6 @@ func normalizeSession(session string) (string, error) {
 		return "", fmt.Errorf("invalid session: use letters, numbers, dash, underscore")
 	}
 	return session, nil
-}
-
-func (m *Manager) getContainer(session string) (*sqlstore.Container, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.getContainerLocked(session)
-}
-
-func (m *Manager) getContainerLocked(session string) (*sqlstore.Container, error) {
-	if c, ok := m.containers[session]; ok {
-		return c, nil
-	}
-
-	path := dbPathForSession(m.dbBasePath, session)
-	container, err := NewSQLStoreContainer(path)
-	if err != nil {
-		return nil, err
-	}
-	m.containers[session] = container
-	return container, nil
-}
-
-func dbPathForSession(basePath, session string) string {
-	if basePath == "" {
-		return session + ".db"
-	}
-
-	if filepath.Ext(basePath) == ".db" {
-		dir := filepath.Dir(basePath)
-		base := strings.TrimSuffix(filepath.Base(basePath), ".db")
-		filename := base + "-" + session + ".db"
-		return filepath.Join(dir, filename)
-	}
-
-	return filepath.Join(basePath, session+".db")
-}
-
-func getDeviceFromContainer(container *sqlstore.Container) (*store.Device, error) {
-	device, err := container.GetFirstDevice(context.Background())
-	if err != nil {
-		return nil, err
-	}
-	if device == nil {
-		device = container.NewDevice()
-	}
-	return device, nil
-}
-
-func (m *Manager) AutoConnectExisting(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	sessions, err := listSessionsFromDisk(m.dbBasePath)
-	if err != nil {
-		return err
-	}
-
-	var wg sync.WaitGroup
-	for _, session := range sessions {
-		session := session
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-
-			client, err := m.CreateOrGetClientBySession(session)
-			if err != nil {
-				m.setStatus(session, "failed")
-				log.Printf("auto connect %s: %v", session, err)
-				return
-			}
-
-			if err := m.EnsureConnected(ctx, session, client); err != nil {
-				log.Printf("auto connect %s: %v", session, err)
-			}
-		}()
-	}
-	wg.Wait()
-
-	return nil
-}
-
-func listSessionsFromDisk(basePath string) ([]string, error) {
-	dir, prefix, err := sessionsDirPrefix(basePath)
-	if err != nil {
-		return nil, err
-	}
-	if dir == "" {
-		return nil, nil
-	}
-
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	out := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		name := entry.Name()
-		if filepath.Ext(name) != ".db" {
-			continue
-		}
-
-		if prefix != "" && !strings.HasPrefix(name, prefix) {
-			continue
-		}
-
-		base := strings.TrimSuffix(name, ".db")
-		if prefix != "" {
-			base = strings.TrimPrefix(base, prefix)
-		}
-
-		if base == "" || !sessionKeyRe.MatchString(base) {
-			continue
-		}
-
-		out = append(out, base)
-	}
-
-	return out, nil
-}
-
-func sessionsDirPrefix(basePath string) (string, string, error) {
-	if basePath == "" {
-		return ".", "", nil
-	}
-
-	if filepath.Ext(basePath) != ".db" {
-		info, err := os.Stat(basePath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", "", nil
-			}
-			return "", "", err
-		}
-
-		if info.IsDir() {
-			return basePath, "", nil
-		}
-
-		return "", "", nil
-	}
-
-	dir := filepath.Dir(basePath)
-	base := strings.TrimSuffix(filepath.Base(basePath), ".db")
-
-	info, err := os.Stat(basePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			dirInfo, dirErr := os.Stat(dir)
-			if dirErr == nil && dirInfo.IsDir() {
-				return dir, base + "-", nil
-			}
-			if dirErr != nil && !os.IsNotExist(dirErr) {
-				return "", "", dirErr
-			}
-			return "", "", nil
-		}
-		return "", "", err
-	}
-
-	if info.IsDir() {
-		return basePath, "", nil
-	}
-
-	return dir, base + "-", nil
 }
 
 func (m *Manager) EnsureConnected(ctx context.Context, session string, client *whatsmeow.Client) error {
@@ -384,14 +216,17 @@ func (m *Manager) SessionStatus(session string, client *whatsmeow.Client) string
 		return "failed"
 	}
 
-	if client.IsConnected() {
-		return "working"
-	}
-
 	if status, ok := m.getStatus(key); ok {
+		if status == "logout" {
+			return status
+		}
 		if status == "connecting" || status == "failed" {
 			return status
 		}
+	}
+
+	if client.IsConnected() {
+		return "working"
 	}
 
 	if client.Store.ID != nil {
@@ -405,6 +240,9 @@ func (m *Manager) setStatus(session, status string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status[session] = status
+	if status == "logout" {
+		_ = m.persistStatus(session, status)
+	}
 }
 
 func (m *Manager) getStatus(session string) (string, bool) {
@@ -414,100 +252,11 @@ func (m *Manager) getStatus(session string) (string, bool) {
 	return status, ok
 }
 
-type PairingState struct {
-	Phone       string
-	Code        string
-	IssuedAt    time.Time
-	ExpiresAt   time.Time
-	LastAttempt time.Time
-	LastError   string
-	NextRetryAt time.Time
-}
-
-func (m *Manager) SetPairingPhone(session, phone string) error {
-	key, err := normalizeSession(session)
-	if err != nil {
-		return err
-	}
-
-	m.pairMu.Lock()
-	defer m.pairMu.Unlock()
-
-	state := m.pairing[key]
-	if state.Phone != phone {
-		state.Phone = phone
-		state.Code = ""
-		state.IssuedAt = time.Time{}
-		state.ExpiresAt = time.Time{}
-		state.LastAttempt = time.Time{}
-		state.LastError = ""
-		state.NextRetryAt = time.Time{}
-	}
-	m.pairing[key] = state
-	return nil
-}
-
-func (m *Manager) UpdatePairingCode(session, code string, issuedAt time.Time, ttl time.Duration) error {
-	key, err := normalizeSession(session)
-	if err != nil {
-		return err
-	}
-
-	m.pairMu.Lock()
-	defer m.pairMu.Unlock()
-
-	state := m.pairing[key]
-	state.Code = code
-	state.IssuedAt = issuedAt
-	state.ExpiresAt = issuedAt.Add(ttl)
-	state.LastAttempt = time.Time{}
-	state.LastError = ""
-	state.NextRetryAt = time.Time{}
-	m.pairing[key] = state
-	return nil
-}
-
-func (m *Manager) UpdatePairingFailure(session, errMsg string, at time.Time, backoff time.Duration) error {
-	key, err := normalizeSession(session)
-	if err != nil {
-		return err
-	}
-
-	m.pairMu.Lock()
-	defer m.pairMu.Unlock()
-
-	state := m.pairing[key]
-	state.LastAttempt = at
-	state.LastError = errMsg
-	if backoff > 0 {
-		state.NextRetryAt = at.Add(backoff)
-	} else {
-		state.NextRetryAt = time.Time{}
-	}
-	m.pairing[key] = state
-	return nil
-}
-
-func (m *Manager) GetPairingState(session string) (PairingState, bool) {
-	key, err := normalizeSession(session)
-	if err != nil {
-		return PairingState{}, false
-	}
-
-	m.pairMu.RLock()
-	defer m.pairMu.RUnlock()
-	state, ok := m.pairing[key]
-	return state, ok
-}
-
-func (m *Manager) ClearPairing(session string) error {
-	key, err := normalizeSession(session)
-	if err != nil {
-		return err
-	}
-
-	m.pairMu.Lock()
-	defer m.pairMu.Unlock()
-	delete(m.pairing, key)
-	return nil
+func (m *Manager) registerEventHandlers(session string, client *whatsmeow.Client) {
+	client.AddEventHandler(func(evt interface{}) {
+		switch evt.(type) {
+		case *events.LoggedOut:
+			m.setStatus(session, "logout")
+		}
+	})
 }

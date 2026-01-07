@@ -15,6 +15,7 @@ func NewRouter(h *Handler) *gin.Engine {
 	sessions := wa.Group("/sessions")
 	sessions.GET("/:session/me", h.Me)
 	sessions.GET("/:session/pair/stream", h.PairStream)
+	sessions.GET("/stream", h.SessionsStream)
 
 	return r
 }

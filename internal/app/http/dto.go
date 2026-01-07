@@ -18,6 +18,19 @@ type PairStreamResponse struct {
 	Detail      string `json:"detail,omitempty"`
 }
 
+type SessionItemResponse struct {
+	Session  string `json:"session"`
+	ID       string `json:"id,omitempty"`
+	PushName string `json:"pushName,omitempty"`
+	Status   string `json:"status"`
+}
+
+type SessionsStreamResponse struct {
+	Status   string                `json:"status"`
+	Sessions []SessionItemResponse `json:"sessions,omitempty"`
+	Detail   string                `json:"detail,omitempty"`
+}
+
 type MeResponse struct {
 	Status   string `json:"status"`
 	Id       string `json:"id"`

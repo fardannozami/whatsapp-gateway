@@ -27,8 +27,9 @@ func main() {
 	listUC := usecase.NewListClientsUsecase(waManager)
 	meUC := usecase.NewMeUsecase(waManager)
 	pairSU := usecase.NewPairStreamUsecase(waManager)
+	sessUC := usecase.NewListSessionsUsecase(waManager)
 
-	handler := http.NewHandler(pairUC, listUC, meUC, pairSU)
+	handler := http.NewHandler(pairUC, listUC, meUC, pairSU, sessUC)
 	router := http.NewRouter(handler)
 
 	log.Printf("HTTP listening on :%s", cfg.Port)
