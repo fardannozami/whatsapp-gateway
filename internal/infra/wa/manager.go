@@ -2,6 +2,7 @@ package wa
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"regexp"
@@ -22,6 +23,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	clients    map[string]*whatsmeow.Client
 	containers map[string]*sqlstore.Container
+	dbs        map[string]*sql.DB
 	status     map[string]string
 	statusFile string
 	statusMu   sync.Mutex
@@ -35,6 +37,7 @@ func NewManager(dbBasePath string, logger walog.Logger) *Manager {
 		log:        logger,
 		clients:    make(map[string]*whatsmeow.Client),
 		containers: make(map[string]*sqlstore.Container),
+		dbs:        make(map[string]*sql.DB),
 		status:     make(map[string]string),
 		statusFile: statusFilePath(dbBasePath),
 		pairing:    make(map[string]PairingState),
@@ -66,6 +69,9 @@ func (m *Manager) CreateOrGetClientBySession(session string) (*whatsmeow.Client,
 	key, err := normalizeSession(session)
 	if err != nil {
 		return nil, err
+	}
+	if status, ok := m.getStatus(key); ok && status == "deleting" {
+		return nil, fmt.Errorf("session is being deleted")
 	}
 
 	// 1️⃣ cek memory
@@ -108,6 +114,9 @@ func (m *Manager) CreateOrGetClientByPhone(phone string) (*whatsmeow.Client, *st
 	key, err := normalizeSession(phone)
 	if err != nil {
 		return nil, nil, err
+	}
+	if status, ok := m.getStatus(key); ok && status == "deleting" {
+		return nil, nil, fmt.Errorf("session is being deleted")
 	}
 	container, err := m.getContainer(key)
 	if err != nil {
@@ -218,6 +227,9 @@ func (m *Manager) SessionStatus(session string, client *whatsmeow.Client) string
 
 	if status, ok := m.getStatus(key); ok {
 		if status == "logout" {
+			return status
+		}
+		if status == "deleting" {
 			return status
 		}
 		if status == "connecting" || status == "failed" {

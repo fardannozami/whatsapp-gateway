@@ -16,6 +16,9 @@ func NewRouter(h *Handler) *gin.Engine {
 	sessions.GET("/:session/me", h.Me)
 	sessions.GET("/:session/pair/stream", h.PairStream)
 	sessions.GET("/stream", h.SessionsStream)
+	sessions.DELETE("/:session", h.DeleteSession)
+	sessions.DELETE("/:session/force", h.ForceDeleteSession)
+	sessions.POST("/:session/stop", h.StopSession)
 
 	return r
 }

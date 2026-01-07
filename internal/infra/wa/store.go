@@ -21,11 +21,12 @@ func (m *Manager) getContainerLocked(session string) (*sqlstore.Container, error
 	}
 
 	path := dbPathForSession(m.dbBasePath, session)
-	container, err := NewSQLStoreContainer(path)
+	container, db, err := OpenSQLStore(path)
 	if err != nil {
 		return nil, err
 	}
 	m.containers[session] = container
+	m.dbs[session] = db
 	return container, nil
 }
 

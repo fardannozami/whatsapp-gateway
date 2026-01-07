@@ -31,6 +31,14 @@ type SessionsStreamResponse struct {
 	Detail   string                `json:"detail,omitempty"`
 }
 
+type DeleteSessionResponse struct {
+	Status string `json:"status"`
+}
+
+type StopSessionResponse struct {
+	Status string `json:"status"`
+}
+
 type MeResponse struct {
 	Status   string `json:"status"`
 	Id       string `json:"id"`

@@ -13,26 +13,31 @@ import (
 )
 
 func NewSQLStoreContainer(sqlPath string) (*sqlstore.Container, error) {
+	container, _, err := OpenSQLStore(sqlPath)
+	return container, err
+}
+
+func OpenSQLStore(sqlPath string) (*sqlstore.Container, *sql.DB, error) {
 	if err := os.MkdirAll(filepath.Dir(sqlPath), 0o755); err != nil {
-		return nil, fmt.Errorf("mkdir db dir: %w", err)
+		return nil, nil, fmt.Errorf("mkdir db dir: %w", err)
 	}
 
 	db, err := sql.Open("sqlite", sqliteDSN(sqlPath))
 	if err != nil {
-		return nil, fmt.Errorf("Open sqlite: %w", err)
+		return nil, nil, fmt.Errorf("Open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
 	if _, err := db.ExecContext(context.Background(), "PRAGMA foreign_keys = ON;"); err != nil {
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+		return nil, nil, fmt.Errorf("enable foreign keys: %w", err)
 	}
 
 	container := sqlstore.NewWithDB(db, "sqlite", nil)
 	if err := container.Upgrade(context.Background()); err != nil {
-		return nil, fmt.Errorf("upgrade db schema: %w", err)
+		return nil, nil, fmt.Errorf("upgrade db schema: %w", err)
 	}
 
-	return container, nil
+	return container, db, nil
 }
 
 func sqliteDSN(path string) string {
