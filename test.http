@@ -15,3 +15,8 @@ Content-Type: application/json
 {
     "phone": "6281229822979"
 }
+
+### get per session
+GET http://localhost:8080/api/sessions/wa-2/me
+Accept: application/json
+Content-Type: application/json

@@ -10,10 +10,11 @@ import (
 type Handler struct {
 	pairUC *usecase.PairCodeUsecase
 	listUC *usecase.ListClientsUsecase
+	meUC   *usecase.MeUsecase
 }
 
-func NewHandler(pairUC *usecase.PairCodeUsecase, listUC *usecase.ListClientsUsecase) *Handler {
-	return &Handler{pairUC: pairUC, listUC: listUC}
+func NewHandler(pairUC *usecase.PairCodeUsecase, listUC *usecase.ListClientsUsecase, meUC *usecase.MeUsecase) *Handler {
+	return &Handler{pairUC: pairUC, listUC: listUC, meUC: meUC}
 }
 
 func (h *Handler) Health(c *gin.Context) {
@@ -49,6 +50,30 @@ func (h *Handler) PairCode(c *gin.Context) {
 	c.JSON(http.StatusOK, PairCodeResponse{
 		Status:      out.Status,
 		PairingCode: out.PairingCode,
+	})
+}
+
+func (h *Handler) Me(c *gin.Context) {
+	session := c.Param("session")
+
+	if session == "" {
+		c.JSON(400, gin.H{
+			"error": "session param is required",
+		})
+		return
+	}
+
+	out, err := h.meUC.Execute(c.Request.Context(), session)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "get me failed", "detail": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, MeResponse{
+		Status:   out.Status,
+		Id:       out.ID,
+		JID:      out.JID,
+		PushName: out.PushName,
 	})
 }
 

@@ -39,7 +39,7 @@ func (u *PairCodeUsecase) Execute(ctx context.Context, in PairCodeInput) (*PairC
 	}
 
 	// Connect first
-	if err := u.wa.EnsureConnected(ctx, client); err != nil {
+	if err := u.wa.EnsureConnected(ctx, in.Session, client); err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,6 +24,7 @@ type Manager struct {
 	mu         sync.RWMutex
 	clients    map[string]*whatsmeow.Client
 	containers map[string]*sqlstore.Container
+	status     map[string]string
 }
 
 func NewManager(dbBasePath string, logger walog.Logger) *Manager {
@@ -31,6 +33,7 @@ func NewManager(dbBasePath string, logger walog.Logger) *Manager {
 		log:        logger,
 		clients:    make(map[string]*whatsmeow.Client),
 		containers: make(map[string]*sqlstore.Container),
+		status:     make(map[string]string),
 	}
 }
 
@@ -75,13 +78,15 @@ func (m *Manager) CreateOrGetClientBySession(session string) (*whatsmeow.Client,
 		return c, nil
 	}
 
-	// 3️⃣ SELALU NewDevice
-	// sqlstore akan auto-load device lama kalau ada
+	// 3️⃣ load device dari DB kalau ada, kalau belum ada bikin baru
 	container, err := m.getContainerLocked(key)
 	if err != nil {
 		return nil, fmt.Errorf("open store: %w", err)
 	}
-	device := container.NewDevice()
+	device, err := getDeviceFromContainer(container)
+	if err != nil {
+		return nil, fmt.Errorf("load device: %w", err)
+	}
 
 	// 4️⃣ create client
 	client := whatsmeow.NewClient(device, m.log)
@@ -101,7 +106,10 @@ func (m *Manager) CreateOrGetClientByPhone(phone string) (*whatsmeow.Client, *st
 	if err != nil {
 		return nil, nil, fmt.Errorf("open store: %w", err)
 	}
-	device := container.NewDevice()
+	device, err := getDeviceFromContainer(container)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load device: %w", err)
+	}
 	client := whatsmeow.NewClient(device, m.log)
 
 	return client, device, nil
@@ -169,10 +177,156 @@ func dbPathForSession(basePath, session string) string {
 	return filepath.Join(basePath, session+".db")
 }
 
-func (m *Manager) EnsureConnected(ctx context.Context, client *whatsmeow.Client) error {
+func getDeviceFromContainer(container *sqlstore.Container) (*store.Device, error) {
+	device, err := container.GetFirstDevice(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	if device == nil {
+		device = container.NewDevice()
+	}
+	return device, nil
+}
+
+func (m *Manager) AutoConnectExisting(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	sessions, err := listSessionsFromDisk(m.dbBasePath)
+	if err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	for _, session := range sessions {
+		session := session
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			client, err := m.CreateOrGetClientBySession(session)
+			if err != nil {
+				m.setStatus(session, "failed")
+				log.Printf("auto connect %s: %v", session, err)
+				return
+			}
+
+			if err := m.EnsureConnected(ctx, session, client); err != nil {
+				log.Printf("auto connect %s: %v", session, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	return nil
+}
+
+func listSessionsFromDisk(basePath string) ([]string, error) {
+	dir, prefix, err := sessionsDirPrefix(basePath)
+	if err != nil {
+		return nil, err
+	}
+	if dir == "" {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	out := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+		if filepath.Ext(name) != ".db" {
+			continue
+		}
+
+		if prefix != "" && !strings.HasPrefix(name, prefix) {
+			continue
+		}
+
+		base := strings.TrimSuffix(name, ".db")
+		if prefix != "" {
+			base = strings.TrimPrefix(base, prefix)
+		}
+
+		if base == "" || !sessionKeyRe.MatchString(base) {
+			continue
+		}
+
+		out = append(out, base)
+	}
+
+	return out, nil
+}
+
+func sessionsDirPrefix(basePath string) (string, string, error) {
+	if basePath == "" {
+		return ".", "", nil
+	}
+
+	if filepath.Ext(basePath) != ".db" {
+		info, err := os.Stat(basePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return "", "", nil
+			}
+			return "", "", err
+		}
+
+		if info.IsDir() {
+			return basePath, "", nil
+		}
+
+		return "", "", nil
+	}
+
+	dir := filepath.Dir(basePath)
+	base := strings.TrimSuffix(filepath.Base(basePath), ".db")
+
+	info, err := os.Stat(basePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			dirInfo, dirErr := os.Stat(dir)
+			if dirErr == nil && dirInfo.IsDir() {
+				return dir, base + "-", nil
+			}
+			if dirErr != nil && !os.IsNotExist(dirErr) {
+				return "", "", dirErr
+			}
+			return "", "", nil
+		}
+		return "", "", err
+	}
+
+	if info.IsDir() {
+		return basePath, "", nil
+	}
+
+	return dir, base + "-", nil
+}
+
+func (m *Manager) EnsureConnected(ctx context.Context, session string, client *whatsmeow.Client) error {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return err
+	}
+
 	if client.IsConnected() {
+		m.setStatus(key, "working")
 		return nil
 	}
+
+	m.setStatus(key, "connecting")
 
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
@@ -184,8 +338,14 @@ func (m *Manager) EnsureConnected(ctx context.Context, client *whatsmeow.Client)
 
 	select {
 	case <-ctx.Done():
+		m.setStatus(key, "failed")
 		return fmt.Errorf("connect timeout: %w", ctx.Err())
 	case err := <-errCh:
+		if err != nil {
+			m.setStatus(key, "failed")
+			return err
+		}
+		m.setStatus(key, "working")
 		return err
 	}
 }
@@ -209,4 +369,40 @@ func (m *Manager) GetJIDString(client *whatsmeow.Client) (string, bool) {
 		return "", false
 	}
 	return types.JID(*id).String(), true
+}
+
+func (m *Manager) SessionStatus(session string, client *whatsmeow.Client) string {
+	key, err := normalizeSession(session)
+	if err != nil {
+		return "failed"
+	}
+
+	if client.IsConnected() {
+		return "working"
+	}
+
+	if status, ok := m.getStatus(key); ok {
+		if status == "connecting" || status == "failed" {
+			return status
+		}
+	}
+
+	if client.Store.ID != nil {
+		return "stopped"
+	}
+
+	return "failed"
+}
+
+func (m *Manager) setStatus(session, status string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status[session] = status
+}
+
+func (m *Manager) getStatus(session string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	status, ok := m.status[session]
+	return status, ok
 }
